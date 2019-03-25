@@ -1,11 +1,12 @@
 import 'dart:async';
-import 'dart:developer';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:audioplayers/audio_cache.dart';
 import 'package:flutter_datetime_picker/flutter_datetime_picker.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 import 'dart:math';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:intl/intl.dart';
 
 /*
  * Alarm example: https://github.com/Yahhi/pomodoro_on_flutter
@@ -19,7 +20,7 @@ class MyApp extends StatelessWidget {
       title: 'Welcome to Flutter',
       home: Scaffold(
         appBar: AppBar(
-          title: Text('Welcome to CSF Alarm'),
+          title: Text('Tik-Tak Alarm'),
         ),
         body: Center(
           child: Alarm(),
@@ -31,66 +32,136 @@ class MyApp extends StatelessWidget {
 
 class AlarmState extends State<Alarm> {
   String alarmingText = "Alarm!";
-  int duration = 0;
+  Duration timeToAlarm;
+  TimeOfDay alarmTime;
   Timer counter;
   AudioPlayer currentPlayer;
   BuildContext context;
 
   static AudioCache player = new AudioCache();
-  static const alarmAudioPath = "alarm.mp3";
+  static const _alarmAudioPath = "alarm.mp3";
+  static const _timePrefName = "timePref";
+
 
   @override
   Widget build(BuildContext context) {
     this.context = context;
     if (counter == null) {
-      counter = new Timer.periodic(Duration(seconds: 1), handleTimeout);
+      initTime();
+      counter = new Timer.periodic(Duration(seconds: 1), handleTick);
     }
     return Scaffold(
       body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: <Widget>[
-            Text("Time to alarm: ${Duration(seconds: duration)}"),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: <Widget>[
-                FlatButton(
+        child: Padding(
+          padding: EdgeInsets.all(30),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            mainAxisSize: MainAxisSize.max,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Column(
+                  children: <Widget>[
+                    Text("Time to alarm", style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w400,
+                        color: Colors.blue.shade900
+                    )),
+                    Text("${formatDuration(timeToAlarm)}", style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.blue.shade900
+                    )),
+                  ]
+              ),
+              Column(
+                  children: <Widget>[
+                    Text("Alarm time", style: TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.w400,
+                        color: Colors.blue.shade900
+                    )),
+                    Text("${formatTimeOfDay(alarmTime)}", style: TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.blue.shade900
+                    )),
+                  ]
+              ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: <Widget>[
+                  RaisedButton(
+                      onPressed: () {
+                        DatePicker.showTimePicker(
+                            context, showTitleActions: true,
+                            onConfirm: setAlarmTime,
+                            currentTime: DateTime.now());
+                      },
+                      child: Text(
+                        'Setup alarm',
+                        style: TextStyle(
+                            fontSize: 16
+                        ),
+                      ),
+                      color: Colors.blue.shade400
+                  ),
+                  RaisedButton(
                     onPressed: () {
-                      DatePicker.showTimePicker(context, showTitleActions: true,
-                          onConfirm: (date) {
-                        setState(() {
-                          duration = date.second;
-                        });
-                      }, currentTime: DateTime.now());
+                      stopAlarm();
                     },
-                    child: Text('Setup alarm')),
-                FlatButton(
-                  onPressed: () {
-
-                    stopAlarm();
-                  },
-                  child: Text("Stop alarm"),
-                ),
-              ],
-            ),
-          ],
+                    child: Text("Stop alarm",
+                      style: TextStyle(
+                          fontSize: 16
+                      ),),
+                    color: Colors.orange.shade400,
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  void handleTimeout(Timer timer) {
-    if (duration == 1) {
-      showStopDialog();
-      startAlarm();
-      setState(() {
-        duration = 0;
-      });
-    } else if (duration > 1) {
-      setState(() {
-        duration--;
-      });
+  void initTime() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    String alarmTimeRaw = prefs.getString(_timePrefName);
+    if (alarmTimeRaw == null) {
+      return;
     }
+    setState(() {
+      alarmTime = TimeOfDay.fromDateTime(DateTime.parse(alarmTimeRaw));
+      timeToAlarm = getTimeToAlarm();
+    });
+  }
+
+  void setAlarmTime(DateTime time) async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_timePrefName, time.toString());
+    setState(() {
+      alarmTime = TimeOfDay.fromDateTime(time);
+      timeToAlarm = getTimeToAlarm();
+    });
+  }
+
+  void handleTick(Timer timer) {
+    Duration nextTimeToAlarm = getTimeToAlarm();
+    if (nextTimeToAlarm.inSeconds == 0) {
+      startAlarm();
+      showStopDialog();
+    }
+    setState(() {
+      timeToAlarm = nextTimeToAlarm;
+    });
+  }
+
+  void startAlarm() {
+    player
+        .loop(_alarmAudioPath, mode: PlayerMode.LOW_LATENCY)
+        .then((currentPlayer) {
+      this.currentPlayer = currentPlayer;
+    });
   }
 
   final _text = TextEditingController();
@@ -106,7 +177,8 @@ class AlarmState extends State<Alarm> {
         barrierDismissible: false,
         builder: (BuildContext context) {
           return SimpleDialog(
-            title: const Text("Let's to stop it!", textAlign: TextAlign.center,),
+            title: const Text(
+              "Let's to stop it!", textAlign: TextAlign.center,),
             children: <Widget>[
               Column(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -122,22 +194,10 @@ class AlarmState extends State<Alarm> {
                           contentPadding: const EdgeInsets.all(20.0)),
                       autofocus: true,
                       keyboardType:
-                          TextInputType.numberWithOptions(signed: true),
+                      TextInputType.numberWithOptions(signed: true),
 
                     )
                   ]),
-
-//              Row(
-//                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-//                  children: <Widget>[
-//                    FlatButton(
-//                      onPressed: () {
-//                        stopAlarm();
-//                        Navigator.pop(context);
-//                      },
-//                      child: const Text('Stop'),
-//                    ),
-//                  ])
             ],
           );
         });
@@ -153,21 +213,10 @@ class AlarmState extends State<Alarm> {
     }
   }
 
-  void startAlarm() {
-    player
-        .loop(alarmAudioPath, mode: PlayerMode.LOW_LATENCY)
-        .then((currentPlayer) {
-      this.currentPlayer = currentPlayer;
-    });
-  }
-
   void stopAlarm() {
     if (currentPlayer != null) {
       currentPlayer.stop();
     }
-    setState(() {
-      duration = 0;
-    });
     Fluttertoast.showToast(
         msg: "Great!🏆 Wake up ASAP",
         toastLength: Toast.LENGTH_SHORT,
@@ -177,6 +226,50 @@ class AlarmState extends State<Alarm> {
         textColor: Colors.white,
         fontSize: 16.0
     );
+  }
+
+  Duration getTimeToAlarm() {
+    Duration now = durationFromDateTime(DateTime.now());
+    Duration alarmDuration = durationFromTimeOfDate(alarmTime);
+    Duration diff = alarmDuration - now;
+    if (diff.isNegative) {
+      Duration nextDayAlarmTime = alarmDuration + Duration(days: 1);
+      return nextDayAlarmTime - now;
+    }
+    return diff;
+  }
+
+  int secondsFromDateTime(DateTime time) {
+    return time.hour * Duration.secondsPerHour +
+        time.minute * Duration.secondsPerMinute + time.second;
+  }
+
+  Duration durationFromDateTime(DateTime time) {
+    return Duration(
+        hours: time.hour, minutes: time.minute, seconds: time.second
+    );
+  }
+
+  String formatDuration(Duration duration) {
+    if (duration == null) {
+      return "never";
+    }
+    //hack
+    return duration.toString().substring(0, 8).replaceAll(".", "");
+  }
+
+  String formatTimeOfDay(TimeOfDay timeOfDay) {
+    if (timeOfDay == null) {
+      return "never";
+    }
+    final now = new DateTime.now();
+    final date = DateTime(
+        now.year, now.month, now.day, timeOfDay.hour, timeOfDay.minute);
+    return new DateFormat('hh:mm').format(date);
+  }
+
+  Duration durationFromTimeOfDate(TimeOfDay timeOfDay) {
+    return Duration(hours: timeOfDay.hour, minutes: timeOfDay.minute);
   }
 }
 
